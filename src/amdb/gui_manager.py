@@ -454,7 +454,7 @@ class DatabaseManagerGUI:
                 local_frame.grid_remove()
                 remote_frame.grid()
         
-        connection_mode.trace('w', lambda *args: switch_mode())
+        connection_mode.trace_add('write', lambda *args: switch_mode())
         switch_mode()  # 初始显示
         
         # 手动输入
