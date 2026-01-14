@@ -1,0 +1,55 @@
+{
+  "test_time": 1768041197.376844,
+  "bindings": {
+    "c": {
+      "file_exists": true,
+      "compiler": "gcc",
+      "file_size": 5622
+    },
+    "cpp": {
+      "file_exists": true,
+      "compiler": "g++",
+      "file_size": 2575
+    },
+    "go": {
+      "file_exists": true,
+      "compiler": "go",
+      "file_size": 3593
+    },
+    "nodejs": {
+      "file_exists": true,
+      "compiler": "node",
+      "file_size": 4363
+    },
+    "php": {
+      "file_exists": true,
+      "compiler": "php",
+      "file_size": 4633
+    },
+    "rust": {
+      "file_exists": true,
+      "compiler": "rustc",
+      "file_size": 4767
+    },
+    "java": {
+      "file_exists": true,
+      "compiler": "javac",
+      "file_size": 2322
+    },
+    "swift": {
+      "file_exists": true,
+      "compiler": "swiftc",
+      "file_size": 4376
+    },
+    "ruby": {
+      "file_exists": true,
+      "compiler": "ruby",
+      "file_size": 3548
+    },
+    "kotlin": {
+      "file_exists": true,
+      "compiler": "kotlinc",
+      "file_size": 1601
+    }
+  }
+}

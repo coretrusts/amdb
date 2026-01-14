@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+venv/
+venv_cython/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.spec
+*.dmg
+*.tar.gz
+*.zip
+*.exe
+*.app
+
+# Test
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+*.log
+
+# Database files (optional - uncomment if needed)
+# data/
+# *.amdb
+# *.sst
+# *.bpt
+# *.mpt
+
+# Keep dist structure but ignore large binaries
+dist/darwin_*/
+dist/linux_*/
+dist/win_*/
+!dist/*.tar.gz
+!dist/*.dmg
+!dist/*.zip
+
+# Keep source structure
+!src/
+!docs/
+!examples/
+!tests/
