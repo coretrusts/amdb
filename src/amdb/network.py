@@ -666,3 +666,10 @@ class DatabaseWrapper:
             return self.remote_db.get_history(key)
         else:
             return self.db.version_manager.get_history(key)
+    
+    def get_all_keys(self):
+        """获取所有键"""
+        if self.is_remote:
+            return self.remote_db.get_all_keys()
+        else:
+            return self.db.version_manager.get_all_keys()
