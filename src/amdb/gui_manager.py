@@ -513,7 +513,7 @@ class DatabaseManagerGUI:
                             self.data_dir = None
                             self.config_path = None
                             # 创建统一接口包装器
-                            self.db_wrapper = RemoteDatabase(remote_db=self.remote_db)
+                            self.db_wrapper = DatabaseWrapper(remote_db=self.remote_db)
                             
                             self._update_status(f"已连接: {host}:{port}/{database}")
                             dialog.destroy()
@@ -565,7 +565,7 @@ class DatabaseManagerGUI:
                     self.config_path = config_path
                     self.data_dir = data_dir if data_dir else self.db.data_dir
                     # 创建统一接口包装器
-                    self.db_wrapper = RemoteDatabase(db=self.db)
+                    self.db_wrapper = DatabaseWrapper(db=self.db)
                     
                     # 强制等待一下，确保数据加载完成
                     import time
