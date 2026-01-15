@@ -28,7 +28,7 @@ class DatabaseManagerGUI:
         
         self.db: Optional[Database] = None
         self.remote_db: Optional[RemoteDatabase] = None
-        self.db_wrapper: Optional[RemoteDatabase] = None  # 统一接口包装器
+        self.db_wrapper: Optional[DatabaseWrapper] = None  # 统一接口包装器
         self.config_path: Optional[str] = None
         self.data_dir: Optional[str] = None
         self.host: Optional[str] = None
