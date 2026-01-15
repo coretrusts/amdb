@@ -1441,10 +1441,44 @@ class DatabaseManagerGUI:
             
             # SELECT 命令
             elif query_upper.startswith("SELECT "):
-                # SELECT * FROM <prefix> 或 SELECT <key>
+                # SELECT * FROM <prefix> [LIMIT <n>] 或 SELECT <key>
                 if query_upper.startswith("SELECT * FROM "):
-                    # 范围查询
-                    prefix = query[14:].strip()
+                    # 范围查询: select * from <prefix> [limit <n>]
+                    # 解析查询语句，支持 limit 或 limited
+                    query_rest = query[14:].strip()  # 去掉 "SELECT * FROM "
+                    parts = query_rest.split()
+                    
+                    if not parts:
+                        self.query_status.config(text="错误: SELECT * FROM 需要指定前缀")
+                        return
+                    
+                    # 解析prefix和limit
+                    prefix = None
+                    limit = None
+                    
+                    # 查找limit关键字（不区分大小写）
+                    limit_idx = -1
+                    for i, part in enumerate(parts):
+                        if part.upper() in ('LIMIT', 'LIMITED'):
+                            limit_idx = i
+                            break
+                    
+                    if limit_idx >= 0:
+                        # 有limit参数
+                        prefix = ' '.join(parts[:limit_idx])
+                        if limit_idx + 1 < len(parts):
+                            try:
+                                limit = int(parts[limit_idx + 1])
+                            except (ValueError, IndexError):
+                                self.query_status.config(text=f"错误: 无效的limit值: {parts[limit_idx + 1]}")
+                                return
+                        else:
+                            self.query_status.config(text="错误: LIMIT 需要指定数量")
+                            return
+                    else:
+                        # 没有limit参数，整个查询都是prefix
+                        prefix = query_rest
+                    
                     if not prefix:
                         self.query_status.config(text="错误: SELECT * FROM 需要指定前缀")
                         return
@@ -1473,8 +1507,14 @@ class DatabaseManagerGUI:
                                     matching_keys.append(k)
                         
                         if matching_keys:
-                            count = 0
-                            for key in matching_keys[:100]:  # 最多显示100条
+                            total_count = len(matching_keys)
+                            # 使用limit参数或默认1000条（与CLI保持一致）
+                            display_limit = limit if limit is not None else 1000
+                            displayed = 0
+                            
+                            for key in matching_keys:
+                                if displayed >= display_limit:
+                                    break
                                 value = self.db_wrapper.get(key)
                                 if value:
                                     key_str = key.decode('utf-8', errors='ignore')
@@ -1486,12 +1526,12 @@ class DatabaseManagerGUI:
                                         value_str = value.hex()[:100] + "..."
                                     
                                     self.result_tree.insert("", tk.END, values=(key_str, value_str, "✓ 找到"))
-                                    count += 1
+                                    displayed += 1
                             
-                            if len(matching_keys) > 100:
-                                self.query_status.config(text=f"查询成功：找到 {len(matching_keys)} 条记录（显示前100条）")
+                            if total_count > display_limit:
+                                self.query_status.config(text=f"查询成功：找到 {total_count} 条记录（显示前 {display_limit} 条）")
                             else:
-                                self.query_status.config(text=f"查询成功：找到 {len(matching_keys)} 条记录")
+                                self.query_status.config(text=f"查询成功：找到 {total_count} 条记录")
                         else:
                             self.query_status.config(text=f"查询完成：未找到以 '{prefix}' 开头的键")
                             messagebox.showinfo("提示", f"未找到以 '{prefix}' 开头的键\n\n提示: 尝试使用 'SELECT * FROM {prefix}:' 或检查键的前缀")
