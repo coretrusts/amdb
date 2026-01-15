@@ -673,3 +673,18 @@ class DatabaseWrapper:
             return self.remote_db.get_all_keys()
         else:
             return self.db.version_manager.get_all_keys()
+    
+    def get_config(self):
+        """获取配置信息"""
+        if self.is_remote:
+            # RemoteDatabase可能没有get_config方法，返回None或空字典
+            if hasattr(self.remote_db, 'get_config'):
+                return self.remote_db.get_config()
+            else:
+                return {}
+        else:
+            # Database可能没有get_config方法，返回None或空字典
+            if hasattr(self.db, 'get_config'):
+                return self.db.get_config()
+            else:
+                return {}
