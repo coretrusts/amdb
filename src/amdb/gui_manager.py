@@ -2109,7 +2109,7 @@ max_workers = {config_dict.get('threading_max_workers', 4)}
      * PUT <key> <value>            - 写入数据
      * DELETE <key>                 - 删除数据（标记删除）
      * BATCH PUT <key1> <value1> ... - 批量写入
-     * SELECT * FROM <prefix>       - 范围查询
+     * SELECT * FROM <prefix> [LIMIT <n>]  - 范围查询（默认1000条，可指定limit）
      * SELECT <key>                  - 单键查询
    - 点击"执行查询"按钮执行
 
