@@ -1565,7 +1565,7 @@ class DatabaseManagerGUI:
             
             else:
                 self.query_status.config(text="错误: 不支持的查询格式。支持: GET, PUT, DELETE, BATCH PUT, SELECT")
-                messagebox.showwarning("提示", "不支持的查询格式\n\n支持的命令:\n- GET <key>\n- PUT <key> <value>\n- DELETE <key>\n- BATCH PUT <key1> <value1> ...\n- SELECT * FROM <prefix>\n- SELECT <key>")
+                messagebox.showwarning("提示", "不支持的查询格式\n\n支持的命令:\n- GET <key>\n- PUT <key> <value>\n- DELETE <key>\n- BATCH PUT <key1> <value1> ...\n- SELECT * FROM <prefix> [LIMIT <n>]\n- SELECT <key>")
             
             # 刷新数据浏览
             self._refresh_data()
