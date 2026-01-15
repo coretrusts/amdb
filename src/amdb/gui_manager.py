@@ -203,7 +203,7 @@ class DatabaseManagerGUI:
   PUT <key> <value>            - 写入数据
   DELETE <key>                - 删除数据（标记删除）
   BATCH PUT <key1> <value1> <key2> <value2> ...  - 批量写入
-  SELECT * FROM <prefix>      - 查询所有以prefix开头的键
+  SELECT * FROM <prefix> [LIMIT <n>]  - 查询所有以prefix开头的键（默认1000条）
   SELECT <key>                - 查询指定键（等同于GET）
   
 示例:
@@ -211,6 +211,7 @@ class DatabaseManagerGUI:
   PUT user:002 "{\"name\": \"张三\"}"
   BATCH PUT user:003 "data1" user:004 "data2"
   SELECT * FROM user
+  SELECT * FROM tx LIMIT 5000
   SELECT transaction:001"""
         
         help_label = ttk.Label(help_frame, text=help_text, font=("Courier", 9), justify=tk.LEFT)
