@@ -15,7 +15,7 @@ from typing import Optional, Dict, Any, List
 from pathlib import Path
 from .database import Database
 from .config import load_config
-from .network import RemoteDatabase, RemoteDatabase
+from .network import RemoteDatabase, DatabaseWrapper
 
 
 class DatabaseManagerGUI:

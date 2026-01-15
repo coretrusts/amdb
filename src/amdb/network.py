@@ -597,3 +597,72 @@ class DatabaseServer:
         
         return None
 
+
+
+
+class DatabaseWrapper:
+    """统一接口包装器，封装Database和RemoteDatabase"""
+    
+    def __init__(self, db=None, remote_db=None):
+        """
+        Args:
+            db: 本地Database实例
+            remote_db: 远程RemoteDatabase实例
+        """
+        if db and remote_db:
+            raise ValueError("不能同时提供db和remote_db")
+        if not db and not remote_db:
+            raise ValueError("必须提供db或remote_db之一")
+        
+        self.db = db
+        self.remote_db = remote_db
+        self.is_remote = remote_db is not None
+    
+    def put(self, key, value):
+        """写入数据"""
+        if self.is_remote:
+            return self.remote_db.put(key, value)
+        else:
+            return self.db.put(key, value)
+    
+    def get(self, key, version=None):
+        """读取数据"""
+        if self.is_remote:
+            return self.remote_db.get(key, version)
+        else:
+            return self.db.get(key, version)
+    
+    def batch_put(self, items):
+        """批量写入"""
+        if self.is_remote:
+            return self.remote_db.batch_put(items)
+        else:
+            return self.db.batch_put(items)
+    
+    def delete(self, key):
+        """删除数据"""
+        if self.is_remote:
+            return self.remote_db.delete(key)
+        else:
+            return self.db.delete(key)
+    
+    def flush(self, force_sync=False):
+        """刷新"""
+        if self.is_remote:
+            return self.remote_db.flush(force_sync)
+        else:
+            return self.db.flush(force_sync)
+    
+    def get_stats(self):
+        """获取统计信息"""
+        if self.is_remote:
+            return self.remote_db.get_stats()
+        else:
+            return self.db.get_stats()
+    
+    def get_history(self, key):
+        """获取版本历史"""
+        if self.is_remote:
+            return self.remote_db.get_history(key)
+        else:
+            return self.db.version_manager.get_history(key)
