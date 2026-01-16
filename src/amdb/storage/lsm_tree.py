@@ -281,39 +281,128 @@ class SSTable:
         
         from .file_format import SSTableFormat, FileMagic
         
+        try:
+            file_size = os.path.getsize(self.filepath)
+            if file_size < 4:
+                # 文件太小，无法包含魔数
+                self.index = {}
+                self._loaded = True
+                return
+        except Exception:
+            self.index = {}
+            self._loaded = True
+            return
+        
         with open(self.filepath, 'rb') as f:
             # 检查文件魔数
             magic = f.read(4)
+            if len(magic) < 4:
+                # 文件太小，无法读取魔数
+                self.index = {}
+                self._loaded = True
+                return
+            
             f.seek(0)
             
             if magic == FileMagic.SST:
                 # 标准格式：从header读取
                 try:
                     key_count, index_offset, footer_offset = SSTableFormat.read_header(f)
+                    # 验证索引偏移量
+                    if index_offset >= file_size or index_offset < 0:
+                        raise ValueError("Invalid index offset")
+                    
                     # 读取索引
                     f.seek(index_offset)
-                    index_len = struct.unpack('I', f.read(4))[0]
-                    index_json = json.loads(f.read(index_len).decode())
+                    index_len_bytes = f.read(4)
+                    if len(index_len_bytes) < 4:
+                        raise ValueError("Incomplete index length")
+                    
+                    index_len = struct.unpack('I', index_len_bytes)[0]
+                    
+                    # 验证索引长度
+                    if index_len <= 0 or index_len > (file_size - index_offset - 4):
+                        raise ValueError("Invalid index length")
+                    
+                    index_data = f.read(index_len)
+                    if len(index_data) < index_len:
+                        raise ValueError("Incomplete index data")
+                    
+                    index_json = json.loads(index_data.decode('utf-8'))
                     self.index = {bytes.fromhex(k): v for k, v in index_json.items()}
                 except Exception:
                     # 如果标准格式读取失败，尝试旧格式
-                    self._load_index_legacy(f)
+                    try:
+                        self._load_index_legacy(f)
+                    except Exception:
+                        # 旧格式也失败，清空索引
+                        self.index = {}
             else:
                 # 旧格式：从文件末尾读取
-                self._load_index_legacy(f)
+                try:
+                    self._load_index_legacy(f)
+                except Exception:
+                    # 旧格式读取失败，清空索引
+                    self.index = {}
         
         self._loaded = True
     
     def _load_index_legacy(self, f):
         """加载旧格式索引（向后兼容）"""
-        f.seek(-8, 2)  # 读取最后8字节（索引偏移量）
-        index_offset = struct.unpack('Q', f.read(8))[0]
-        
-        f.seek(index_offset)
-        index_len = struct.unpack('I', f.read(4))[0]
-        index_json = json.loads(f.read(index_len).decode())
-        
-        self.index = {bytes.fromhex(k): v for k, v in index_json.items()}
+        try:
+            file_size = os.path.getsize(self.filepath)
+            if file_size < 8:
+                # 文件太小，无法包含索引偏移量
+                self.index = {}
+                return
+            
+            # 读取最后8字节（索引偏移量）
+            f.seek(-8, 2)
+            index_offset_bytes = f.read(8)
+            if len(index_offset_bytes) < 8:
+                # 文件末尾不足8字节
+                self.index = {}
+                return
+            
+            index_offset = struct.unpack('Q', index_offset_bytes)[0]
+            
+            # 验证索引偏移量是否有效
+            if index_offset >= file_size or index_offset < 0:
+                # 索引偏移量无效
+                self.index = {}
+                return
+            
+            f.seek(index_offset)
+            index_len_bytes = f.read(4)
+            if len(index_len_bytes) < 4:
+                # 索引长度字段不完整
+                self.index = {}
+                return
+            
+            index_len = struct.unpack('I', index_len_bytes)[0]
+            
+            # 验证索引长度是否有效
+            if index_len <= 0 or index_len > (file_size - index_offset - 4):
+                # 索引长度无效
+                self.index = {}
+                return
+            
+            index_data = f.read(index_len)
+            if len(index_data) < index_len:
+                # 索引数据不完整
+                self.index = {}
+                return
+            
+            # 尝试解码JSON
+            try:
+                index_json = json.loads(index_data.decode('utf-8'))
+                self.index = {bytes.fromhex(k): v for k, v in index_json.items()}
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                # 解码失败，可能是文件损坏
+                self.index = {}
+        except Exception as e:
+            # 任何其他错误，清空索引
+            self.index = {}
     
     def exists(self) -> bool:
         """检查文件是否存在"""

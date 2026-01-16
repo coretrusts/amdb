@@ -695,13 +695,11 @@ class DatabaseManagerGUI:
         try:
             # 检查数据库文件状态（仅本地连接）
             if not self.is_remote and self.db:
-                if not self.db.check_files_exist():
-                    print("[GUI调试] 警告: 数据库文件不存在或已清空，正在重新加载...")
-                    self.db.reload_if_files_changed()
-                    print("[GUI调试] 已重新加载数据库状态")
-                    # 更新数据库包装器
-                    if self.db_wrapper:
-                        self.db_wrapper = DatabaseWrapper(db=self.db)
+                # 每次刷新都检查文件状态，确保获取最新数据
+                self.db.reload_if_files_changed()
+                # 更新数据库包装器
+                if self.db_wrapper:
+                    self.db_wrapper = DatabaseWrapper(db=self.db)
             
             # 获取统计信息
             try:
@@ -761,8 +759,12 @@ class DatabaseManagerGUI:
                 for idx, key in enumerate(all_keys[start_idx:end_idx]):
                     actual_idx = start_idx + idx
                     try:
-                        # 读取值
+                        # 读取值（如果值为None，跳过该键，不显示）
                         value = self.db_wrapper.get(key)
+                        
+                        if value is None:
+                            # 键在版本管理器中存在但实际数据不存在，静默跳过（不显示警告）
+                            continue
                         
                         if value:
                             # 获取版本信息
@@ -811,10 +813,9 @@ class DatabaseManagerGUI:
                                 key_str = key.decode('utf-8', errors='ignore')
                             except:
                                 key_str = key.hex()[:50]
-                            self.data_tree.insert("", tk.END, values=(key_str, "(值未找到)", 0, "N/A"))
-                            display_count += 1
-                            error_count += 1
-                            print(f"[GUI调试] 警告: 键 {key_str} 的值未找到")
+                            # 值未找到，静默跳过（不显示警告，不插入到树视图）
+                            # 这些键可能是已删除或损坏的数据，不需要显示
+                            continue
                     except Exception as e:
                         # 记录错误但继续处理其他键
                         error_count += 1
@@ -1214,9 +1215,10 @@ class DatabaseManagerGUI:
                     key_str = key.decode('utf-8', errors='ignore')
                     key_str_lower = key_str.lower()
                     
-                    # 获取值
+                    # 获取值（自动检测文件更新）
                     value = self.db_wrapper.get(key)
-                    if not value:
+                    if value is None:
+                        # 值为None，跳过（可能是已删除的数据）
                         continue
                     
                     # 根据搜索模式进行匹配
@@ -1330,13 +1332,11 @@ class DatabaseManagerGUI:
         
         # 检查数据库文件状态（仅本地连接）
         if not self.is_remote and self.db:
-            if not self.db.check_files_exist():
-                print("[GUI调试] 警告: 数据库文件不存在或已清空，正在重新加载...")
-                self.db.reload_if_files_changed()
-                print("[GUI调试] 已重新加载数据库状态")
-                # 更新数据库包装器
-                if self.db_wrapper:
-                    self.db_wrapper = DatabaseWrapper(db=self.db)
+            # 每次查询都检查文件状态，确保获取最新数据
+            self.db.reload_if_files_changed()
+            # 更新数据库包装器
+            if self.db_wrapper:
+                self.db_wrapper = DatabaseWrapper(db=self.db)
         
         try:
             # 清空结果

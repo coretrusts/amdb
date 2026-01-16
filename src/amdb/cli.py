@@ -862,10 +862,8 @@ class AmDbCLI(cmd.Cmd):
         
         # 检查数据库文件状态（仅本地连接）
         if not self.is_remote and self.db:
-            if not self.db.check_files_exist():
-                print("⚠ 警告: 数据库文件不存在或已清空，正在重新加载...")
-                self.db.reload_if_files_changed()
-                print("✓ 已重新加载数据库状态")
+            # 每次查询都检查文件状态，确保获取最新数据
+            self.db.reload_if_files_changed()
         
         if not args:
             print("用法: select * from <prefix> 或 select <key>")
@@ -921,7 +919,8 @@ class AmDbCLI(cmd.Cmd):
                         if displayed >= display_limit:
                             break
                         value = self.db.get(key)
-                        if value:
+                        # 过滤掉无效键（值为None的键）
+                        if value is not None:
                             key_str = key.decode('utf-8', errors='ignore')
                             value_str = value.decode('utf-8', errors='ignore')
                             if len(value_str) > 50:
@@ -942,6 +941,9 @@ class AmDbCLI(cmd.Cmd):
             # 单键查询: select <key>（使用格式化显示）
             key = args.strip().encode()
             try:
+                # 检查并刷新数据（确保获取最新状态）
+                if not self.is_remote:
+                    self.db.reload_if_files_changed()
                 value = self.db.get(key)
                 if value:
                     key_str = key.decode('utf-8', errors='ignore')

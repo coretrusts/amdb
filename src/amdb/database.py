@@ -103,6 +103,9 @@ class Database:
         
         # 加载数据库元数据（.amdb文件）
         self._load_metadata()
+        
+        # 跟踪文件修改时间，用于检测外部更新
+        self._last_file_mtime = self._get_version_file_mtime()
     
     def put(self, key: bytes, value: bytes) -> Tuple[bool, bytes]:
         """
@@ -228,14 +231,51 @@ class Database:
                 return latest.value == b'__DELETED__'
             return False
     
+    def _get_version_file_mtime(self) -> float:
+        """获取版本文件的修改时间"""
+        try:
+            version_file = Path(self.data_dir) / "versions" / "versions.ver"
+            if version_file.exists():
+                return version_file.stat().st_mtime
+        except Exception:
+            pass
+        return 0.0
+    
+    def _check_and_reload_if_updated(self) -> bool:
+        """
+        检查文件是否被更新（通过修改时间），如果是则重新加载数据
+        用于确保连接后能实时读取新数据或删除的数据
+        
+        Returns:
+            True: 文件已更新并重新加载
+            False: 文件未更新
+        """
+        try:
+            current_mtime = self._get_version_file_mtime()
+            # 如果文件修改时间发生变化，说明有新数据写入或删除
+            if current_mtime > 0 and current_mtime != self._last_file_mtime:
+                # 文件被更新，重新加载数据
+                self.reload_if_files_changed()
+                self._last_file_mtime = current_mtime
+                return True
+        except Exception:
+            pass
+        return False
+    
     def get(self, key: bytes, version: Optional[int] = None) -> Optional[bytes]:
         """
         读取数据（优化：减少锁竞争，提升并发读取性能）
         确保从所有存储位置读取：版本管理器、LSM树、B+树、所有分片
+        自动检测文件更新，确保能实时读取新数据或删除的数据
+        
         Args:
             key: 键
             version: 版本号（None表示最新版本）
         """
+        # 检查文件是否被更新（新数据写入或删除）
+        # 这样即使不重新连接，也能读取到最新数据
+        self._check_and_reload_if_updated()
+        
         # 优化：读取操作减少锁持有时间
         if version is None:
             # 1. 优先从版本管理器获取最新版本（需要锁）
@@ -328,19 +368,60 @@ class Database:
         """开始事务"""
         return self.transaction_manager.begin_transaction()
     
-    def commit_transaction(self, tx: Transaction) -> bool:
-        """提交事务"""
+    def commit_transaction(self, tx: Transaction, auto_flush: bool = True) -> bool:
+        """
+        提交事务
+        
+        Args:
+            tx: 事务对象
+            auto_flush: 是否自动flush（默认True，确保数据持久化）
+        
+        Returns:
+            是否成功提交
+        """
         def commit_fn(operations, tx_id):
             try:
-                for op in operations:
-                    if op.operation == 'put':
-                        self.put(op.key, op.value)
-                    # delete操作需要实现
+                # 批量写入优化：如果操作较多，使用batch_put
+                if len(operations) > 10:
+                    # 批量写入
+                    batch_items = []
+                    for op in operations:
+                        if op.operation == 'put':
+                            batch_items.append((op.key, op.value))
+                        elif op.operation == 'delete':
+                            # 删除操作：使用特殊标记值
+                            batch_items.append((op.key, b'__DELETED__'))
+                    
+                    if batch_items:
+                        success, _ = self.batch_put(batch_items)
+                        return success
+                else:
+                    # 少量操作，逐个写入
+                    for op in operations:
+                        if op.operation == 'put':
+                            self.put(op.key, op.value)
+                        elif op.operation == 'delete':
+                            self.delete(op.key)
+                
                 return True
-            except Exception:
+            except Exception as e:
+                import traceback
+                print(f"事务提交失败: {e}")
+                traceback.print_exc()
                 return False
         
-        return self.transaction_manager.commit_transaction(tx, commit_fn)
+        success = self.transaction_manager.commit_transaction(tx, commit_fn)
+        
+        # 自动flush确保数据持久化（如果启用）
+        if success and auto_flush:
+            try:
+                # 使用异步模式flush，避免阻塞
+                self.flush(async_mode=True)
+            except Exception as e:
+                print(f"事务提交后flush失败: {e}")
+                # flush失败不影响事务提交成功
+        
+        return success
     
     def abort_transaction(self, tx: Transaction):
         """中止事务"""
@@ -547,10 +628,13 @@ class Database:
             # 2. 存储引擎刷新（LSM树刷新到.sst文件）- 关键，必须同步
             # 重要：确保所有MemTable都刷新到磁盘，包括未满的MemTable
             if hasattr(self.storage.lsm_tree, 'flush'):
-                # 同步刷新所有MemTable到磁盘
-                self.storage.lsm_tree.flush(sync=True)
+                # 同步刷新所有MemTable到磁盘（flush方法内部已实现同步）
+                self.storage.lsm_tree.flush()
             else:
                 self.storage.lsm_tree.flush()
+            
+            # 更新文件修改时间跟踪（数据已持久化，文件已更新）
+            self._last_file_mtime = self._get_version_file_mtime()
             
             # 3. 等待所有异步刷新完成（如果force_sync=True）
             if force_sync:
@@ -598,6 +682,9 @@ class Database:
                 self.index_manager.save_to_disk(self.data_dir)
                 # 保存数据库元数据（.amdb文件）
                 self._save_metadata()
+                
+                # 更新文件修改时间跟踪（数据已持久化，文件已更新）
+                self._last_file_mtime = self._get_version_file_mtime()
     
     def _save_metadata(self):
         """保存数据库元数据到磁盘（.amdb文件）"""
@@ -713,8 +800,15 @@ class Database:
         # 文件存在，尝试重新加载（以防文件被外部更新）
         try:
             with self.lock:
+                # 重新加载版本管理器
                 self.version_manager.load_from_disk(self.data_dir)
+                # 重新加载索引管理器
                 self.index_manager.load_from_disk(self.data_dir)
+                # 重新加载SSTable列表（如果使用LSM树）
+                if hasattr(self.storage, 'lsm_tree') and hasattr(self.storage.lsm_tree, '_load_sstables'):
+                    self.storage.lsm_tree._load_sstables()
+                # 更新文件修改时间跟踪
+                self._last_file_mtime = self._get_version_file_mtime()
         except Exception:
             pass
         
