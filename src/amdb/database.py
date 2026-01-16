@@ -691,9 +691,12 @@ class Database:
             with self.lock:
                 # 清空版本管理器
                 self.version_manager.current_versions.clear()
-                self.version_manager.version_history.clear()
+                self.version_manager.versions.clear()
                 # 清空索引管理器
-                self.index_manager.indexes.clear()
+                self.index_manager.primary_index.clear()
+                self.index_manager.version_index.clear()
+                self.index_manager.time_index.clear()
+                self.index_manager.secondary_indexes.clear()
                 # 清空存储引擎（重新初始化）
                 try:
                     self.storage = StorageEngine(
@@ -872,10 +875,18 @@ class Database:
             return False
     
     def get_stats(self) -> Dict[str, Any]:
-        """获取数据库统计信息"""
+        """获取数据库统计信息（排除已删除的键）"""
         with self.lock:
+            # 获取所有键，但排除已删除的键
+            all_keys = self.version_manager.get_all_keys()
+            valid_keys = []
+            for key in all_keys:
+                latest = self.version_manager.get_latest(key)
+                if latest and latest.value != b'__DELETED__':
+                    valid_keys.append(key)
+            
             stats = {
-                'total_keys': len(self.version_manager.get_all_keys()),
+                'total_keys': len(valid_keys),  # 只统计有效键
                 'current_version': self.transaction_manager.get_snapshot_version(),
                 'merkle_root': self.get_root_hash().hex(),
                 'storage_dir': self.data_dir,
