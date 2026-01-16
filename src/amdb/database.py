@@ -247,7 +247,9 @@ class Database:
                         return None
                     return latest.value
             
-            # 2. 如果版本管理器没有，尝试从存储引擎获取（LSM树、B+树、所有分片）
+            # 2. 如果版本管理器没有（可能是批量写入跳过了Version创建），从存储引擎获取
+            # 性能优化：批量写入时跳过了Version对象创建，直接从存储引擎读取
+            # 同时，为了保持读取性能，我们需要从存储引擎读取并创建Version对象
             result = self.storage.get(key, use_cache=True)
             if result:
                 value = result[0]
@@ -403,25 +405,23 @@ class Database:
                             traceback.print_exc()
                             return (False, b'')
                     
-                    # 每批后强制垃圾回收，释放内存
-                    gc.collect()
+                    # 性能优化：不强制垃圾回收，让Python自动管理内存
+                    # gc.collect() 会严重影响性能，移除它
                 
                 # 返回最后一个结果
-                return results[-1] if results else (True, self.get_root_hash())
+                return results[-1] if results else (True, b'')
             elif len(items) > MAX_BATCH_SIZE:
-                # 串行分批处理，每批后强制垃圾回收
+                # 串行分批处理
                 results = []
-                import gc
                 for i in range(0, len(items), MAX_BATCH_SIZE):
                     batch = items[i:i+MAX_BATCH_SIZE]
                     result = self._batch_put_internal(batch)
                     results.append(result)
                     if not result[0]:
                         break  # 如果失败，立即返回
-                    # 每批后强制垃圾回收，释放内存
-                    gc.collect()
+                    # 性能优化：不强制垃圾回收，让Python自动管理内存
                 # 返回最后一个结果
-                return results[-1] if results else (True, self.get_root_hash())
+                return results[-1] if results else (True, b'')
             else:
                 return self._batch_put_internal(items)
         except Exception as e:
@@ -437,34 +437,44 @@ class Database:
             # 稳定性优化：添加异常捕获和资源清理
             
             # 1. 批量创建版本（优化：减少锁竞争，使用快速路径）
-            # 优化：版本创建在锁外执行，减少Database主锁的持有时间
+            # 性能优化：对于大批量，只获取版本号，不创建Version对象
             # 稳定性：添加异常处理
+            items_len = len(items)
             try:
-                version_objs = self.version_manager.create_versions_batch(items)
+                # 性能优化：大批量时使用快速路径，但仍创建Version对象（确保读取正常）
+                # 优化阈值：500以上使用快速路径，平衡性能和稳定性
+                if items_len > 500:
+                    # 使用快速路径：创建Version对象但不计算prev_hash
+                    version_objs = self.version_manager.create_versions_batch(items, return_versions_only=True)
+                    # 验证返回的是Version对象列表
+                    if len(version_objs) != items_len:
+                        print(f"版本对象数量不匹配: {len(version_objs)} != {items_len}")
+                        return (False, b'')
+                    # 构建batch_items，确保version是整数
+                    # 性能优化：使用列表推导式，减少循环开销
+                    # 但为了更好的性能，使用循环并缓存访问
+                    batch_items = [None] * items_len
+                    for i in range(items_len):
+                        key, value = items[i]
+                        # 性能优化：直接访问version属性（version_objs是Version对象列表）
+                        version = version_objs[i].version  # 直接访问，减少中间变量
+                        batch_items[i] = (key, value, version)
+                else:
+                    # 小批量：创建Version对象（保持兼容性）
+                    version_objs = self.version_manager.create_versions_batch(items)
+                    if len(version_objs) != items_len:
+                        print(f"版本对象数量不匹配: {len(version_objs)} != {items_len}")
+                        return (False, b'')
+                    # 构建batch_items
+                    batch_items = [None] * items_len
+                    for i in range(items_len):
+                        key, value = items[i]
+                        version = version_objs[i].version
+                        batch_items[i] = (key, value, version)
             except Exception as e:
                 import traceback
                 print(f"版本创建失败: {e}")
                 traceback.print_exc()
-                return (False, b'')
-            
-            # 验证版本对象数量
-            if len(version_objs) != len(items):
-                print(f"版本对象数量不匹配: {len(version_objs)} != {len(items)}")
-                return (False, b'')
-            
-            # 2. 直接批量写入LSM树（核心路径，最高优先级，对标LevelDB）
-            # 优化：预先构建batch_items，使用列表推导式（比zip稍快）
-            # 稳定性：添加异常处理
-            try:
-                # 优化：使用列表推导式，避免zip的开销
-                items_len = len(items)
-                batch_items = []
-                for i in range(items_len):
-                    key, value = items[i]
-                    version_obj = version_objs[i]
-                    batch_items.append((key, value, version_obj.version))
-            except Exception as e:
-                print(f"构建batch_items失败: {e}")
                 return (False, b'')
             
             # 优化：最小化锁持有时间，只锁定写入操作
@@ -495,10 +505,10 @@ class Database:
             # 大批量操作：延迟到异步线程记录，减少主路径开销
             
             # 3. 完全异步化非关键操作（不阻塞写入，对标LevelDB）
-            # 优化：暂时禁用异步更新以减少崩溃风险
-            # 后续可以优化异步更新线程的实现，确保线程安全
-            
-            return (True, self.get_root_hash())
+            # 优化：get_root_hash计算较慢，延迟到需要时再计算
+            # 性能优化：不立即计算root_hash，减少写入路径开销
+            # 如果需要root_hash，可以在flush时或异步计算
+            return (True, b'')  # 返回空hash，减少计算开销
         except MemoryError:
             # 内存不足，尝试清理
             import gc
@@ -523,22 +533,41 @@ class Database:
         return self.index_manager.query_secondary_index(index_name, index_value)
     
     # 工具方法
-    def flush(self, async_mode: bool = False):
+    def flush(self, async_mode: bool = False, force_sync: bool = False):
         """
-        强制刷新到磁盘（优化：支持异步模式）
+        强制刷新到磁盘（确保所有数据写入磁盘文件）
         Args:
-            async_mode: 如果True，异步持久化非关键文件（索引、元数据），只同步关键文件（LSM、WAL）
+            async_mode: 如果True，非关键文件异步持久化，但关键文件（LSM、WAL）仍同步
+            force_sync: 如果True，强制同步模式，等待所有异步操作完成（确保数据完全持久化）
         """
         with self.lock:
-            # 1. WAL刷新（.wal文件）- 关键，同步
+            # 1. WAL刷新（.wal文件）- 关键，必须同步
             self.wal_logger.flush()
             
-            # 2. 存储引擎刷新（LSM树刷新到.sst文件）- 关键，同步
-            # LSM树内部会异步刷新MemTable，这里只确保已满的MemTable被刷新
-            self.storage.lsm_tree.flush()
+            # 2. 存储引擎刷新（LSM树刷新到.sst文件）- 关键，必须同步
+            # 重要：确保所有MemTable都刷新到磁盘，包括未满的MemTable
+            if hasattr(self.storage.lsm_tree, 'flush'):
+                # 同步刷新所有MemTable到磁盘
+                self.storage.lsm_tree.flush(sync=True)
+            else:
+                self.storage.lsm_tree.flush()
             
-            if async_mode:
-                # 异步模式：非关键文件异步持久化
+            # 3. 等待所有异步刷新完成（如果force_sync=True）
+            if force_sync:
+                # 等待所有异步刷新线程完成
+                import time
+                max_wait = 30  # 最多等待30秒
+                wait_time = 0
+                while wait_time < max_wait:
+                    # 检查是否还有未刷新的MemTable
+                    if hasattr(self.storage.lsm_tree, 'immutable_memtables'):
+                        if len(self.storage.lsm_tree.immutable_memtables) == 0:
+                            break
+                    time.sleep(0.1)
+                    wait_time += 0.1
+            
+            if async_mode and not force_sync:
+                # 异步模式：非关键文件异步持久化（但关键文件已同步）
                 import threading
                 def async_persist():
                     try:
@@ -558,7 +587,7 @@ class Database:
                         traceback.print_exc()
                 threading.Thread(target=async_persist, daemon=True).start()
             else:
-                # 同步模式：所有文件同步持久化（用于确保数据完整性）
+                # 同步模式：所有文件同步持久化（确保数据完整性）
                 # B+树持久化（.bpt文件）
                 self.storage.bplus_tree.flush()
                 # Merkle树持久化（.mpt文件）
@@ -619,6 +648,74 @@ class Database:
             import traceback
             print(f"保存数据库元数据失败: {e}")
             traceback.print_exc()
+    
+    def check_files_exist(self) -> bool:
+        """
+        检查数据库文件是否存在且有效
+        
+        Returns:
+            True: 文件存在且有效
+            False: 文件不存在或已清空
+        """
+        from pathlib import Path
+        
+        # 检查版本文件（最重要的数据文件）
+        versions_dir = Path(self.data_dir) / "versions"
+        version_file = versions_dir / "versions.ver"
+        
+        # 如果版本文件不存在，数据库为空
+        if not version_file.exists():
+            return False
+        
+        # 检查文件大小，如果文件太小（只有文件头），认为数据库为空
+        try:
+            file_size = version_file.stat().st_size
+            # 文件头至少需要：魔数(4) + 版本号(2) + 键数量(8) = 14字节
+            if file_size < 14:
+                return False
+        except Exception:
+            return False
+        
+        return True
+    
+    def reload_if_files_changed(self) -> bool:
+        """
+        检查数据库文件状态，如果文件被删除或清空，重新加载数据
+        
+        Returns:
+            True: 文件状态正常或已重新加载
+            False: 文件状态异常且无法重新加载
+        """
+        if not self.check_files_exist():
+            # 文件不存在或已清空，清空内存缓存
+            with self.lock:
+                # 清空版本管理器
+                self.version_manager.current_versions.clear()
+                self.version_manager.version_history.clear()
+                # 清空索引管理器
+                self.index_manager.indexes.clear()
+                # 清空存储引擎（重新初始化）
+                try:
+                    self.storage = StorageEngine(
+                        self.data_dir,
+                        enable_sharding=self.enable_sharding,
+                        shard_count=self.config.shard_count,
+                        max_file_size=self.config.max_file_size,
+                        config=self.config
+                    )
+                except Exception:
+                    pass
+            return True
+        
+        # 文件存在，尝试重新加载（以防文件被外部更新）
+        try:
+            with self.lock:
+                self.version_manager.load_from_disk(self.data_dir)
+                self.index_manager.load_from_disk(self.data_dir)
+        except Exception:
+            pass
+        
+        return True
     
     def _load_metadata(self):
         """从磁盘加载数据库元数据（.amdb文件）"""

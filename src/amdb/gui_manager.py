@@ -693,6 +693,16 @@ class DatabaseManagerGUI:
             return
         
         try:
+            # 检查数据库文件状态（仅本地连接）
+            if not self.is_remote and self.db:
+                if not self.db.check_files_exist():
+                    print("[GUI调试] 警告: 数据库文件不存在或已清空，正在重新加载...")
+                    self.db.reload_if_files_changed()
+                    print("[GUI调试] 已重新加载数据库状态")
+                    # 更新数据库包装器
+                    if self.db_wrapper:
+                        self.db_wrapper = DatabaseWrapper(db=self.db)
+            
             # 获取统计信息
             try:
                 if self.is_remote:
@@ -1317,6 +1327,16 @@ class DatabaseManagerGUI:
         if not self.db and not self.remote_db:
             messagebox.showwarning("警告", "请先连接数据库")
             return
+        
+        # 检查数据库文件状态（仅本地连接）
+        if not self.is_remote and self.db:
+            if not self.db.check_files_exist():
+                print("[GUI调试] 警告: 数据库文件不存在或已清空，正在重新加载...")
+                self.db.reload_if_files_changed()
+                print("[GUI调试] 已重新加载数据库状态")
+                # 更新数据库包装器
+                if self.db_wrapper:
+                    self.db_wrapper = DatabaseWrapper(db=self.db)
         
         try:
             # 清空结果

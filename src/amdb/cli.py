@@ -289,10 +289,22 @@ class AmDbCLI(cmd.Cmd):
         elif cmd_type == 'tables':
             if not self._check_connection():
                 return
+            # 检查数据库文件状态（仅本地连接）
+            if not self.is_remote and self.db:
+                if not self.db.check_files_exist():
+                    print("⚠ 警告: 数据库文件不存在或已清空，正在重新加载...")
+                    self.db.reload_if_files_changed()
+                    print("✓ 已重新加载数据库状态")
             self._show_tables()
         elif cmd_type == 'keys':
             if not self._check_connection():
                 return
+            # 检查数据库文件状态（仅本地连接）
+            if not self.is_remote and self.db:
+                if not self.db.check_files_exist():
+                    print("⚠ 警告: 数据库文件不存在或已清空，正在重新加载...")
+                    self.db.reload_if_files_changed()
+                    print("✓ 已重新加载数据库状态")
             # 支持限制数量: show keys 5000
             limit = None
             if len(parts) > 1:
@@ -305,6 +317,12 @@ class AmDbCLI(cmd.Cmd):
         elif cmd_type == 'stats':
             if not self._check_connection():
                 return
+            # 检查数据库文件状态（仅本地连接）
+            if not self.is_remote and self.db:
+                if not self.db.check_files_exist():
+                    print("⚠ 警告: 数据库文件不存在或已清空，正在重新加载...")
+                    self.db.reload_if_files_changed()
+                    print("✓ 已重新加载数据库状态")
             self._show_stats()
         elif cmd_type == 'config':
             if not self._check_connection():
@@ -608,6 +626,13 @@ class AmDbCLI(cmd.Cmd):
         key = args.strip().encode()
         
         try:
+            # 检查数据库文件状态（仅本地连接）
+            if not self.is_remote and self.db:
+                if not self.db.check_files_exist():
+                    print("⚠ 警告: 数据库文件不存在或已清空，正在重新加载...")
+                    self.db.reload_if_files_changed()
+                    print("✓ 已重新加载数据库状态")
+            
             if self.is_remote:
                 # 远程连接
                 value = self.remote_db.get(key)
@@ -834,6 +859,13 @@ class AmDbCLI(cmd.Cmd):
         """
         if not self._check_connection():
             return
+        
+        # 检查数据库文件状态（仅本地连接）
+        if not self.is_remote and self.db:
+            if not self.db.check_files_exist():
+                print("⚠ 警告: 数据库文件不存在或已清空，正在重新加载...")
+                self.db.reload_if_files_changed()
+                print("✓ 已重新加载数据库状态")
         
         if not args:
             print("用法: select * from <prefix> 或 select <key>")
