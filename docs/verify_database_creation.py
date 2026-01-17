@@ -4,10 +4,16 @@
 用于诊断数据库创建问题
 """
 
-from src.amdb import Database
+import sys
 from pathlib import Path
 import os
 import shutil
+
+# 添加项目根目录到Python路径
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
+from src.amdb import Database
 
 def verify_database_creation(data_dir: str):
     """验证数据库创建"""
