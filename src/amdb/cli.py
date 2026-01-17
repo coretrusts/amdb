@@ -282,10 +282,15 @@ class AmDbCLI(cmd.Cmd):
             if description:
                 print(f"  描述: {description}")
             
-            # 询问是否立即连接
-            response = input("是否立即连接到此数据库? (y/n): ")
-            if response.lower() == 'y':
-                self._connect(db_path, config_path)
+            # 询问是否立即连接（仅在交互模式下）
+            try:
+                if sys.stdin.isatty():
+                    response = input("是否立即连接到此数据库? (y/n): ")
+                    if response.lower() == 'y':
+                        self._connect(db_path, config_path)
+            except (EOFError, KeyboardInterrupt):
+                # 非交互模式或用户中断，不连接
+                pass
         except Exception as e:
             print(f"✗ 创建数据库失败: {type(e).__name__}: {e}")
             import traceback
