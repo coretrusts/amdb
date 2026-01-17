@@ -15,7 +15,8 @@ from dataclasses import dataclass, field
 class DatabaseConfig:
     """数据库主配置"""
     # 基础配置
-    data_dir: str = "./data/amdb"
+    data_root_dir: str = "./data"  # 数据存储根目录（所有数据库的父目录）
+    data_dir: str = "./data/amdb"  # 单个数据库目录（已废弃，保留用于向后兼容）
     enable_sharding: bool = True
     shard_count: int = 256
     max_file_size: int = 256 * 1024 * 1024  # 256MB
@@ -97,6 +98,7 @@ class DatabaseConfig:
         # 基础配置
         if config.has_section('database'):
             section = config['database']
+            db_config.data_root_dir = section.get('data_root_dir', db_config.data_root_dir)
             db_config.data_dir = section.get('data_dir', db_config.data_dir)
             db_config.enable_sharding = section.getboolean('enable_sharding', db_config.enable_sharding)
             db_config.shard_count = section.getint('shard_count', db_config.shard_count)
@@ -199,6 +201,7 @@ class DatabaseConfig:
         
         # 基础配置
         config.add_section('database')
+        config['database']['data_root_dir'] = self.data_root_dir
         config['database']['data_dir'] = self.data_dir
         config['database']['enable_sharding'] = str(self.enable_sharding)
         config['database']['shard_count'] = str(self.shard_count)
@@ -294,6 +297,8 @@ class DatabaseConfig:
     def load_from_env(self):
         """从环境变量加载配置"""
         # 基础配置
+        if os.getenv('AMDB_DATA_ROOT_DIR'):
+            self.data_root_dir = os.getenv('AMDB_DATA_ROOT_DIR')
         if os.getenv('AMDB_DATA_DIR'):
             self.data_dir = os.getenv('AMDB_DATA_DIR')
         if os.getenv('AMDB_ENABLE_SHARDING'):

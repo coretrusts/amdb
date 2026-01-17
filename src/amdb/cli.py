@@ -36,11 +36,13 @@ class AmDbCLI(cmd.Cmd):
     prompt = 'amdb> '
     
     def __init__(self, data_dir: Optional[str] = None, config_path: Optional[str] = None,
-                 host: Optional[str] = None, port: Optional[int] = None, database: Optional[str] = None):
+                 host: Optional[str] = None, port: Optional[int] = None, database: Optional[str] = None,
+                 data_root_dir: Optional[str] = None):
         super().__init__()
         self.db: Optional[Database] = None
         self.remote_db: Optional[RemoteDatabase] = None
         self.data_dir: Optional[str] = None
+        self.data_root_dir: Optional[str] = None  # 数据存储根目录
         self.config_path: Optional[str] = None
         self.host: Optional[str] = None
         self.port: Optional[int] = None
@@ -48,10 +50,64 @@ class AmDbCLI(cmd.Cmd):
         self.connected = False
         self.is_remote = False  # 是否为远程连接
         
-        # 如果提供了初始参数，自动连接
+        # 优先使用传入的 data_root_dir，否则从配置加载
+        if data_root_dir:
+            self.data_root_dir = data_root_dir
+        else:
+            try:
+                config = load_config(config_path)
+                self.data_root_dir = config.data_root_dir
+            except:
+                self.data_root_dir = None  # 未指定，使用默认相对路径
+        
+        # 如果提供了 data_dir，检查是否是根目录
+        # 如果用户通过 --data-dir 指定了路径，优先将其作为数据存储根目录
+        should_connect = True  # 是否应该连接数据库
+        if data_dir and os.path.exists(data_dir):
+            try:
+                from .db_scanner import scan_databases
+                from pathlib import Path
+                
+                # 检查指定路径是否是一个数据库目录（有 database.amdb 或 versions 目录）
+                amdb_file = Path(data_dir) / "database.amdb"
+                versions_dir = Path(data_dir) / "versions"
+                is_db_dir = amdb_file.exists() or versions_dir.exists()
+                
+                dbs = scan_databases(data_dir)
+                
+                if is_db_dir:
+                    # 如果指定路径是一个数据库目录，从父目录扫描其他数据库
+                    parent_dir = os.path.dirname(os.path.abspath(data_dir))
+                    if parent_dir != data_dir:  # 确保不是根目录
+                        parent_dbs = scan_databases(parent_dir)
+                        if len(parent_dbs) > 1:
+                            # 父目录包含多个数据库，使用父目录作为根目录
+                            self.data_root_dir = parent_dir
+                            print(f"检测到数据存储根目录: {parent_dir}")
+                        else:
+                            # 父目录不是根目录，使用父目录作为根目录（至少包含当前数据库）
+                            self.data_root_dir = parent_dir
+                            print(f"将父目录设置为数据存储根目录: {parent_dir}")
+                else:
+                    # 如果指定路径不是数据库目录，将其作为根目录
+                    # 不连接数据库，因为这不是一个数据库目录
+                    self.data_root_dir = data_dir
+                    should_connect = False  # 不连接，因为这是根目录，不是数据库目录
+                    print(f"将指定路径设置为数据存储根目录: {data_dir}")
+                    if len(dbs) > 0:
+                        print(f"找到 {len(dbs)} 个数据库")
+                    else:
+                        print(f"提示: 该目录下暂无数据库，可以使用 'connect <数据库名>' 创建新数据库")
+            except Exception as e:
+                # 如果扫描失败，仍然将指定路径作为根目录，但不连接
+                self.data_root_dir = data_dir
+                should_connect = False
+                print(f"将指定路径设置为数据存储根目录: {data_dir}")
+        
+        # 如果提供了初始参数，自动连接（仅在应该连接时）
         if host and port:
             self._connect_remote(host, port, database)
-        elif data_dir or config_path:
+        elif (data_dir or config_path) and should_connect:
             self._connect(data_dir, config_path)
     
     def _connect(self, data_dir: Optional[str] = None, config_path: Optional[str] = None) -> bool:
@@ -175,15 +231,25 @@ class AmDbCLI(cmd.Cmd):
         
         # 如果提供了数据目录，检查是否需要补全路径
         if data_dir:
+            # 获取数据存储根目录（如果未指定，使用默认相对路径）
+            if self.data_root_dir:
+                data_root = self.data_root_dir
+            else:
+                try:
+                    config = load_config(config_path)
+                    data_root = config.data_root_dir if config.data_root_dir else "./data"
+                except:
+                    data_root = "./data"
+            
             # 如果不是绝对路径且不以./或../开头，尝试作为数据库名处理
             if not os.path.isabs(data_dir) and not data_dir.startswith('./') and not data_dir.startswith('../'):
-                # 尝试补全为 ./data/<数据库名>
-                potential_path = os.path.join('./data', data_dir)
+                # 尝试从数据存储根目录补全路径
+                potential_path = os.path.join(data_root, data_dir)
                 if os.path.exists(potential_path):
                     data_dir = potential_path
                     print(f"自动补全路径: {data_dir}")
                 else:
-                    # 如果./data/<数据库名>不存在，仍然使用原路径（让用户决定是否创建）
+                    # 如果数据根目录/<数据库名>不存在，仍然使用原路径（让用户决定是否创建）
                     pass
         
         # 如果数据目录不存在，询问是否创建
@@ -196,6 +262,56 @@ class AmDbCLI(cmd.Cmd):
                 return
         
         self._connect(data_dir, config_path)
+    
+    def do_set(self, args: str):
+        """
+        设置配置
+        
+        用法:
+          set root <数据存储根目录路径>  # 设置数据存储根目录
+          set root                      # 显示当前数据存储根目录
+          
+        示例:
+          set root /path/to/storage      # 设置数据存储根目录
+          set root ./data                # 设置相对路径
+        """
+        if not args:
+            print("用法: set root <路径>")
+            print("示例: set root /path/to/storage")
+            return
+        
+        parts = args.strip().split(None, 1)
+        if len(parts) < 1:
+            print("用法: set root <路径>")
+            return
+        
+        if parts[0] == 'root':
+            if len(parts) < 2:
+                # 显示当前根目录
+                current_root = self.data_root_dir if self.data_root_dir else "./data"
+                print(f"当前数据存储根目录: {current_root}")
+                return
+            
+            root_path = parts[1].strip()
+            # 验证路径是否存在
+            if not os.path.exists(root_path):
+                response = input(f"路径不存在: {root_path}\n是否创建? (y/n): ")
+                if response.lower() == 'y':
+                    os.makedirs(root_path, exist_ok=True)
+                else:
+                    print("已取消")
+                    return
+            
+            if not os.path.isdir(root_path):
+                print(f"✗ 错误: {root_path} 不是一个目录")
+                return
+            
+            self.data_root_dir = os.path.abspath(root_path)
+            print(f"✓ 已设置数据存储根目录: {self.data_root_dir}")
+            print(f"提示: 使用 'show databases' 查看该目录下的所有数据库")
+        else:
+            print(f"✗ 未知的配置项: {parts[0]}")
+            print("可用配置项: root")
     
     def do_disconnect(self, args: str):
         """
@@ -244,10 +360,20 @@ class AmDbCLI(cmd.Cmd):
         
         data_dir = args.strip()
         
+        # 获取数据存储根目录（如果未指定，使用默认相对路径）
+        if self.data_root_dir:
+            data_root = self.data_root_dir
+        else:
+            try:
+                config = load_config()
+                data_root = config.data_root_dir if config.data_root_dir else "./data"
+            except:
+                data_root = "./data"
+        
         # 如果不是绝对路径且不以./或../开头，尝试作为数据库名处理
         if not os.path.isabs(data_dir) and not data_dir.startswith('./') and not data_dir.startswith('../'):
-            # 尝试补全为 ./data/<数据库名>
-            potential_path = os.path.join('./data', data_dir)
+            # 尝试从数据存储根目录补全路径
+            potential_path = os.path.join(data_root, data_dir)
             if os.path.exists(potential_path):
                 data_dir = potential_path
                 print(f"自动补全路径: {data_dir}")
@@ -335,35 +461,47 @@ class AmDbCLI(cmd.Cmd):
             print("可用命令: databases, tables, keys, stats, config, connection")
     
     def _show_databases(self):
-        """显示所有数据库"""
-        data_dir = "./data"
-        if not os.path.exists(data_dir):
-            print("✗ 数据目录不存在")
+        """显示所有数据库（从数据存储根目录扫描）"""
+        # 使用数据存储根目录（如果未指定，使用默认相对路径）
+        if self.data_root_dir:
+            data_root = self.data_root_dir
+        else:
+            # 从配置加载，如果配置也没有，使用默认相对路径
+            try:
+                config = load_config(self.config_path)
+                data_root = config.data_root_dir if config.data_root_dir else "./data"
+            except:
+                data_root = "./data"
+        
+        if not os.path.exists(data_root):
+            print(f"✗ 数据存储根目录不存在: {data_root}")
+            print(f"提示: 使用 'set root <路径>' 设置数据存储根目录")
             return
         
-        databases = []
-        for item in os.listdir(data_dir):
-            item_path = os.path.join(data_dir, item)
-            if os.path.isdir(item_path):
-                try:
-                    db = Database(data_dir=item_path)
-                    stats = db.get_stats()
-                    key_count = stats.get('total_keys', 0)
-                    databases.append((item, item_path, key_count))
-                except Exception:
-                    databases.append((item, item_path, 0))
+        # 使用数据库扫描器扫描
+        from .db_scanner import scan_databases
+        databases = scan_databases(data_root)
         
         if databases:
+            print(f"\n数据存储根目录: {data_root}")
             print("\n数据库列表:")
             print("-" * 80)
             print(f"{'数据库名':<30} {'路径':<40} {'记录数':<10}")
             print("-" * 80)
-            for name, path, count in sorted(databases):
+            for db in databases:
+                name = db['name']
+                path = db['path']
+                count = db['total_keys'] if db['total_keys'] > 0 else 0
                 print(f"{name:<30} {path:<40} {count:<10}")
             print("-" * 80)
             print(f"总计: {len(databases)} 个数据库")
         else:
-            print("✗ 未找到数据库")
+            print(f"\n数据存储根目录: {data_root}")
+            print(f"✗ 在 {data_root} 中未找到数据库")
+            if self.data_root_dir:
+                print(f"提示: 该目录下暂无数据库，可以使用 'connect <数据库名>' 创建新数据库")
+            else:
+                print(f"提示: 使用 'set root <路径>' 设置数据存储根目录")
     
     def _show_tables(self):
         """显示所有表（键前缀）"""
@@ -1091,7 +1229,13 @@ def main():
     parser.add_argument(
         '--data-dir', '-d',
         type=str,
-        help='数据目录路径'
+        help='数据目录路径（单个数据库）'
+    )
+    
+    parser.add_argument(
+        '--data-root-dir', '-r',
+        type=str,
+        help='数据存储根目录路径（包含多个数据库的父目录）'
     )
     
     parser.add_argument(
@@ -1109,7 +1253,7 @@ def main():
     args = parser.parse_args()
     
     # 创建CLI实例
-    cli = AmDbCLI(data_dir=args.data_dir, config_path=args.config)
+    cli = AmDbCLI(data_dir=args.data_dir, config_path=args.config, data_root_dir=args.data_root_dir)
     
     # 如果提供了命令，执行后退出
     if args.command:

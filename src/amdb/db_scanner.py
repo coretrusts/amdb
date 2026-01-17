@@ -36,11 +36,26 @@ def scan_databases(data_dir: str = './data') -> List[Dict[str, any]]:
     for item in os.listdir(data_dir):
         item_path = os.path.join(data_dir, item)
         if os.path.isdir(item_path):
-            # 检查是否是数据库目录（有database.amdb文件或versions目录）
+            # 检查是否是数据库目录
+            # 标准标识：database.amdb文件或versions目录
             amdb_file = Path(item_path) / "database.amdb"
             versions_dir = Path(item_path) / "versions"
             
-            if amdb_file.exists() or versions_dir.exists():
+            # 扩展标识：如果有多个数据库相关目录，也认为是数据库
+            # 这适用于没有database.amdb文件但有多数据库结构的旧格式
+            lsm_dir = Path(item_path) / "lsm"
+            bplus_dir = Path(item_path) / "bplus"
+            merkle_dir = Path(item_path) / "merkle"
+            wal_dir = Path(item_path) / "wal"
+            
+            # 检查是否有数据库相关结构
+            has_db_structure = (
+                amdb_file.exists() or 
+                versions_dir.exists() or
+                (lsm_dir.exists() and (bplus_dir.exists() or merkle_dir.exists() or wal_dir.exists()))
+            )
+            
+            if has_db_structure:
                 db_info = {
                     'name': item,
                     'path': item_path,
@@ -63,12 +78,20 @@ def scan_databases(data_dir: str = './data') -> List[Dict[str, any]]:
                         pass
                 
                 # 如果没有备注，尝试从版本管理器获取键数量
-                if db_info['total_keys'] == 0 and versions_dir.exists():
+                # 即使没有versions目录，也尝试加载数据库获取键数量（适用于旧格式数据库）
+                if db_info['total_keys'] == 0:
                     try:
                         from .database import Database
                         db = Database(data_dir=item_path)
-                        db_info['total_keys'] = len(db.version_manager.get_all_keys())
+                        # 先尝试从版本管理器获取
+                        try:
+                            db_info['total_keys'] = len(db.version_manager.get_all_keys())
+                        except:
+                            # 如果版本管理器获取失败，尝试使用get_stats获取
+                            stats = db.get_stats()
+                            db_info['total_keys'] = stats.get('total_keys', 0)
                     except Exception:
+                        # 如果加载数据库失败，跳过
                         pass
                 
                 databases.append(db_info)

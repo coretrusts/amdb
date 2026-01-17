@@ -31,10 +31,18 @@ class DatabaseManagerGUI:
         self.db_wrapper: Optional[DatabaseWrapper] = None  # 统一接口包装器
         self.config_path: Optional[str] = None
         self.data_dir: Optional[str] = None
+        self.data_root_dir: Optional[str] = None  # 数据存储根目录
         self.host: Optional[str] = None
         self.port: Optional[int] = None
         self.database: Optional[str] = None
         self.is_remote = False  # 是否为远程连接
+        
+        # 从配置加载数据根目录
+        try:
+            config = load_config()
+            self.data_root_dir = config.data_root_dir
+        except:
+            self.data_root_dir = "./data"
         
         # 创建菜单栏
         self._create_menu()
@@ -327,16 +335,41 @@ class DatabaseManagerGUI:
         dialog.transient(self.root)
         dialog.grab_set()
         
-        # 自动扫描数据库
+        # 数据存储根目录设置
+        root_frame = ttk.LabelFrame(dialog, text="数据存储根目录")
+        root_frame.grid(row=0, column=0, columnspan=3, padx=5, pady=5, sticky=tk.W+tk.E)
+        
+        ttk.Label(root_frame, text="根目录:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+        root_dir_entry = ttk.Entry(root_frame, width=50)
+        root_dir_entry.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        root_dir_entry.insert(0, self.data_root_dir if self.data_root_dir else "./data")
+        
+        def browse_root_dir():
+            dir_path = filedialog.askdirectory(title="选择数据存储根目录", initialdir=self.data_root_dir if self.data_root_dir else "./")
+            if dir_path:
+                root_dir_entry.delete(0, tk.END)
+                root_dir_entry.insert(0, dir_path)
+                refresh_list()
+        
+        ttk.Button(root_frame, text="浏览", command=browse_root_dir).grid(row=0, column=2, padx=5, pady=5)
+        root_frame.columnconfigure(1, weight=1)
+        
+        # 自动扫描数据库（如果未指定，使用默认相对路径）
         from .db_scanner import scan_databases
-        databases = scan_databases('./data')
+        data_root = root_dir_entry.get().strip()
+        if not data_root:
+            # 如果未指定，使用默认相对路径
+            data_root = self.data_root_dir if self.data_root_dir else "./data"
+            root_dir_entry.delete(0, tk.END)
+            root_dir_entry.insert(0, data_root)
+        databases = scan_databases(data_root)
         
         # 数据库列表（自动扫描 + 预设）
-        ttk.Label(dialog, text="数据库列表（自动扫描）:").grid(row=0, column=0, columnspan=3, padx=5, pady=5, sticky=tk.W)
+        ttk.Label(dialog, text="数据库列表（从根目录扫描）:").grid(row=1, column=0, columnspan=3, padx=5, pady=5, sticky=tk.W)
         
         # 创建Treeview显示数据库列表
         tree_frame = ttk.Frame(dialog)
-        tree_frame.grid(row=1, column=0, columnspan=3, padx=5, pady=5, sticky=tk.W+tk.E+tk.N+tk.S)
+        tree_frame.grid(row=2, column=0, columnspan=3, padx=5, pady=5, sticky=tk.W+tk.E+tk.N+tk.S)
         
         db_tree = ttk.Treeview(tree_frame, columns=('path', 'keys', 'description'), show='tree headings', height=8)
         db_tree.heading('#0', text='数据库名称')
@@ -383,11 +416,22 @@ class DatabaseManagerGUI:
         
         # 备注显示
         desc_label = ttk.Label(dialog, text="", foreground='gray')
-        desc_label.grid(row=2, column=0, columnspan=3, padx=5, pady=5, sticky=tk.W)
+        desc_label.grid(row=3, column=0, columnspan=3, padx=5, pady=5, sticky=tk.W)
         
         # 刷新按钮
         def refresh_list():
-            databases = scan_databases('./data')
+            data_root = root_dir_entry.get().strip()
+            if not data_root:
+                # 如果未指定，使用默认相对路径
+                data_root = self.data_root_dir if self.data_root_dir else "./data"
+                root_dir_entry.delete(0, tk.END)
+                root_dir_entry.insert(0, data_root)
+            
+            # 更新数据根目录（只有指定了才更新）
+            if data_root:
+                self.data_root_dir = data_root
+            
+            databases = scan_databases(data_root)
             # 清空现有项
             for item in db_tree.get_children():
                 db_tree.delete(item)
@@ -399,38 +443,48 @@ class DatabaseManagerGUI:
                                      db['total_keys'] if db['total_keys'] > 0 else '未知',
                                      db['description'] if db['description'] else '(无备注)'))
         
-        ttk.Button(dialog, text="刷新列表", command=refresh_list).grid(row=0, column=2, padx=5, pady=5, sticky=tk.E)
+        ttk.Button(dialog, text="刷新列表", command=refresh_list).grid(row=1, column=2, padx=5, pady=5, sticky=tk.E)
+        
+        # 绑定根目录输入框变化事件
+        def on_root_dir_change(*args):
+            refresh_list()
+        root_dir_entry.bind('<Return>', lambda e: refresh_list())
         
         # 分隔线
-        ttk.Separator(dialog, orient=tk.HORIZONTAL).grid(row=3, column=0, columnspan=3, sticky=tk.W+tk.E, padx=5, pady=10)
+        ttk.Separator(dialog, orient=tk.HORIZONTAL).grid(row=4, column=0, columnspan=3, sticky=tk.W+tk.E, padx=5, pady=10)
         
         # 连接模式选择
-        ttk.Label(dialog, text="连接模式:").grid(row=4, column=0, padx=5, pady=5, sticky=tk.W)
+        ttk.Label(dialog, text="连接模式:").grid(row=5, column=0, padx=5, pady=5, sticky=tk.W)
         connection_mode = tk.StringVar(value="local")
-        ttk.Radiobutton(dialog, text="本地文件", variable=connection_mode, value="local").grid(row=4, column=1, padx=5, pady=5, sticky=tk.W)
-        ttk.Radiobutton(dialog, text="远程服务器", variable=connection_mode, value="remote").grid(row=4, column=1, padx=5, pady=5, sticky=tk.E)
+        ttk.Radiobutton(dialog, text="本地文件", variable=connection_mode, value="local").grid(row=5, column=1, padx=5, pady=5, sticky=tk.W)
+        ttk.Radiobutton(dialog, text="远程服务器", variable=connection_mode, value="remote").grid(row=5, column=1, padx=5, pady=5, sticky=tk.E)
         
         # 本地连接输入区域
         local_frame = ttk.LabelFrame(dialog, text="本地连接")
-        local_frame.grid(row=5, column=0, columnspan=3, padx=5, pady=5, sticky=tk.W+tk.E)
+        local_frame.grid(row=6, column=0, columnspan=3, padx=5, pady=5, sticky=tk.W+tk.E)
         
-        ttk.Label(local_frame, text="数据目录:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+        ttk.Label(local_frame, text="数据库路径:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
         data_dir_entry = ttk.Entry(local_frame, width=50)
         data_dir_entry.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
-        data_dir_entry.insert(0, "./data/sample_db")
+        # 初始值留空，等待用户从列表中选择
         
-        # 浏览按钮
+        # 浏览按钮（从根目录选择数据库）
         def browse_data_dir():
-            dir_path = filedialog.askdirectory(title="选择数据目录", initialdir="./data")
+            # 如果指定了根目录，使用指定的；否则使用默认相对路径
+            data_root = root_dir_entry.get().strip()
+            if not data_root:
+                data_root = self.data_root_dir if self.data_root_dir else "./data"
+            dir_path = filedialog.askdirectory(title="选择数据库目录", initialdir=data_root)
             if dir_path:
                 data_dir_entry.delete(0, tk.END)
                 data_dir_entry.insert(0, dir_path)
+                update_description()
         
         ttk.Button(local_frame, text="浏览...", command=browse_data_dir).grid(row=0, column=2, padx=5, pady=5)
         
         # 远程连接输入区域
         remote_frame = ttk.LabelFrame(dialog, text="远程连接")
-        remote_frame.grid(row=6, column=0, columnspan=3, padx=5, pady=5, sticky=tk.W+tk.E)
+        remote_frame.grid(row=7, column=0, columnspan=3, padx=5, pady=5, sticky=tk.W+tk.E)
         
         ttk.Label(remote_frame, text="服务器地址:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
         host_entry = ttk.Entry(remote_frame, width=30)
@@ -460,12 +514,12 @@ class DatabaseManagerGUI:
         switch_mode()  # 初始显示
         
         # 手动输入
-        ttk.Label(dialog, text="或手动输入:").grid(row=7, column=0, columnspan=3, padx=5, pady=5, sticky=tk.W)
+        ttk.Label(dialog, text="或手动输入数据库路径:").grid(row=8, column=0, columnspan=3, padx=5, pady=5, sticky=tk.W)
         
         # 数据库备注（新建或更新时使用）
-        ttk.Label(dialog, text="数据库备注:").grid(row=8, column=0, padx=5, pady=5, sticky=tk.W)
+        ttk.Label(dialog, text="数据库备注:").grid(row=9, column=0, padx=5, pady=5, sticky=tk.W)
         description_entry = ttk.Entry(dialog, width=50)
-        description_entry.grid(row=8, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        description_entry.grid(row=9, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
         description_entry.insert(0, "")
         
         # 如果选中了已有数据库，显示其备注
@@ -479,6 +533,12 @@ class DatabaseManagerGUI:
                     description_entry.insert(0, info['description'])
         
         data_dir_entry.bind('<FocusOut>', lambda e: update_description())
+        
+        # 更新数据根目录
+        def update_data_root():
+            data_root = root_dir_entry.get().strip()
+            if data_root:
+                self.data_root_dir = data_root
         
         def connect():
             try:
@@ -664,8 +724,8 @@ class DatabaseManagerGUI:
                 import traceback
                 traceback.print_exc()
         
-        ttk.Button(dialog, text="连接", command=connect).grid(row=9, column=2, padx=5, pady=10, sticky=tk.E)
-        ttk.Button(dialog, text="取消", command=dialog.destroy).grid(row=9, column=1, padx=5, pady=10, sticky=tk.E)
+        ttk.Button(dialog, text="连接", command=connect).grid(row=10, column=2, padx=5, pady=10, sticky=tk.E)
+        ttk.Button(dialog, text="取消", command=dialog.destroy).grid(row=10, column=1, padx=5, pady=10, sticky=tk.E)
         
         # 配置列权重
         dialog.columnconfigure(1, weight=1)
