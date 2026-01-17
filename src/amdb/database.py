@@ -573,6 +573,23 @@ class Database:
                 print(f"LSM树写入失败: {e}")
                 traceback.print_exc()
                 return (False, b'')
+            
+            # 批量更新索引（重要：确保索引与数据同步）
+            # 优化：批量更新索引，减少锁获取次数
+            try:
+                with self.index_manager.lock:
+                    for i in range(items_len):
+                        key, value = items[i]
+                        version_obj = version_objs[i]
+                        # 批量更新索引
+                        self.index_manager.put(
+                            key, value, version_obj.version, version_obj.timestamp
+                        )
+            except Exception as e:
+                import traceback
+                print(f"索引更新失败: {e}")
+                traceback.print_exc()
+                # 索引更新失败不应影响主操作，但会记录错误
                 
             # 记录审计日志（批量操作，异步记录以减少开销）
             # 优化：批量操作只记录一次，不阻塞主路径
