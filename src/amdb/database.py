@@ -822,7 +822,19 @@ class Database:
         
         metadata_file = Path(self.data_dir) / "database.amdb"
         if not metadata_file.exists():
+            # 如果文件不存在，创建初始元数据文件
             self._created_at = time.time()
+            self._description = ''  # 默认无备注
+            # 确保数据目录存在
+            Path(self.data_dir).mkdir(parents=True, exist_ok=True)
+            # 立即保存元数据，创建 database.amdb 文件
+            try:
+                self._save_metadata()
+            except Exception as e:
+                # 如果保存失败，不影响数据库初始化
+                import traceback
+                print(f"警告: 创建数据库元数据文件失败: {e}")
+                traceback.print_exc()
             return
         
         try:
