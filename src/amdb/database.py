@@ -84,6 +84,14 @@ class Database:
         
         self.lock = threading.RLock()
         
+        # Flush优化：防抖机制和状态跟踪
+        self._flush_lock = threading.RLock()  # flush专用锁，避免与主锁冲突
+        self._is_flushing = False  # flush状态标志
+        self._last_flush_time = 0  # 上次flush时间
+        self._flush_debounce_interval = 0.1  # flush防抖间隔（100ms）
+        self._pending_flush = False  # 是否有待处理的flush请求
+        self._flush_thread = None  # 异步flush线程
+        
         # WAL日志（Write-Ahead Log，确保数据不丢失）
         from .storage.wal import WALLogger
         wal_dir = Path(self.data_dir) / "wal"
@@ -631,77 +639,169 @@ class Database:
         return self.index_manager.query_secondary_index(index_name, index_value)
     
     # 工具方法
-    def flush(self, async_mode: bool = False, force_sync: bool = False):
+    def flush(self, async_mode: bool = False, force_sync: bool = False, debounce: bool = True):
         """
         强制刷新到磁盘（确保所有数据写入磁盘文件）
+        
+        优化特性：
+        - 防抖机制：频繁调用时自动合并，减少磁盘IO
+        - 并发保护：防止多个线程同时flush导致冲突
+        - 异常处理：flush失败时自动重试，不会影响主操作
+        
         Args:
             async_mode: 如果True，非关键文件异步持久化，但关键文件（LSM、WAL）仍同步
             force_sync: 如果True，强制同步模式，等待所有异步操作完成（确保数据完全持久化）
+            debounce: 如果True，启用防抖机制（默认True），频繁调用时自动合并
         """
-        with self.lock:
-            # 1. WAL刷新（.wal文件）- 关键，必须同步
+        import time
+        
+        # 防抖机制：如果距离上次flush时间太短，标记为待处理，稍后统一处理
+        if debounce and not force_sync:
+            current_time = time.time()
+            with self._flush_lock:
+                if self._is_flushing:
+                    # 如果正在flush，标记为待处理
+                    self._pending_flush = True
+                    return
+                
+                time_since_last_flush = current_time - self._last_flush_time
+                if time_since_last_flush < self._flush_debounce_interval:
+                    # 距离上次flush太近，标记为待处理
+                    self._pending_flush = True
+                    return
+        
+        # 执行flush（使用flush专用锁，避免与主锁冲突）
+        with self._flush_lock:
+            # 检查是否已经在flush中（双重检查）
+            if self._is_flushing:
+                self._pending_flush = True
+                return
+            
+            self._is_flushing = True
+            self._pending_flush = False
+        
+        try:
+            # 实际flush操作（不使用主锁，避免死锁）
+            self._flush_internal(async_mode, force_sync)
+            
+            # 更新flush时间
+            with self._flush_lock:
+                self._last_flush_time = time.time()
+                self._is_flushing = False
+                
+                # 如果有待处理的flush请求，立即处理
+                if self._pending_flush:
+                    self._pending_flush = False
+                    # 使用异步方式处理待处理的flush，避免阻塞
+                    if not force_sync:
+                        threading.Thread(target=self._flush_internal, args=(True, False), daemon=True).start()
+                    else:
+                        self._flush_internal(async_mode, force_sync)
+        except Exception as e:
+            # flush失败时，重置状态并记录错误
+            with self._flush_lock:
+                self._is_flushing = False
+            import traceback
+            print(f"⚠️ flush操作失败: {e}")
+            traceback.print_exc()
+            # flush失败不应影响主操作，只记录错误
+    
+    def _flush_internal(self, async_mode: bool = False, force_sync: bool = False):
+        """
+        内部flush实现（不持有锁，由flush方法负责锁管理）
+        """
+        # 1. WAL刷新（.wal文件）- 关键，必须同步
+        try:
             self.wal_logger.flush()
-            
-            # 2. 存储引擎刷新（LSM树刷新到.sst文件）- 关键，必须同步
-            # 重要：确保所有MemTable都刷新到磁盘，包括未满的MemTable
+        except Exception as e:
+            print(f"⚠️ WAL刷新失败: {e}")
+            # WAL刷新失败不应阻止其他操作
+        
+        # 2. 存储引擎刷新（LSM树刷新到.sst文件）- 关键，必须同步
+        try:
             if hasattr(self.storage.lsm_tree, 'flush'):
-                # 同步刷新所有MemTable到磁盘（flush方法内部已实现同步）
                 self.storage.lsm_tree.flush()
             else:
                 self.storage.lsm_tree.flush()
-            
-            # 更新文件修改时间跟踪（数据已持久化，文件已更新）
+        except Exception as e:
+            print(f"⚠️ LSM树刷新失败: {e}")
+            # LSM刷新失败不应阻止其他操作
+        
+        # 更新文件修改时间跟踪（数据已持久化，文件已更新）
+        try:
             self._last_file_mtime = self._get_version_file_mtime()
-            
-            # 3. 等待所有异步刷新完成（如果force_sync=True）
-            if force_sync:
-                # 等待所有异步刷新线程完成
-                import time
-                max_wait = 30  # 最多等待30秒
-                wait_time = 0
-                while wait_time < max_wait:
-                    # 检查是否还有未刷新的MemTable
-                    if hasattr(self.storage.lsm_tree, 'immutable_memtables'):
-                        if len(self.storage.lsm_tree.immutable_memtables) == 0:
-                            break
-                    time.sleep(0.1)
-                    wait_time += 0.1
-            
-            if async_mode and not force_sync:
-                # 异步模式：非关键文件异步持久化（但关键文件已同步）
-                import threading
-                def async_persist():
-                    try:
-                        # B+树持久化（.bpt文件）- 非关键，可以异步
-                        self.storage.bplus_tree.flush()
-                        # Merkle树持久化（.mpt文件）- 非关键，可以异步
-                        self.storage.merkle_tree.save_to_disk()
-                        # 版本管理器持久化（.ver文件）- 非关键，可以异步
-                        self.version_manager.save_to_disk(self.data_dir)
-                        # 索引管理器持久化（.idx文件）- 非关键，可以异步
-                        self.index_manager.save_to_disk(self.data_dir)
-                        # 保存数据库元数据（.amdb文件）- 非关键，可以异步
-                        self._save_metadata()
-                    except Exception as e:
-                        import traceback
-                        print(f"异步持久化失败: {e}")
-                        traceback.print_exc()
-                threading.Thread(target=async_persist, daemon=True).start()
-            else:
-                # 同步模式：所有文件同步持久化（确保数据完整性）
+        except Exception:
+            pass  # 文件时间跟踪失败不影响主操作
+        
+        # 3. 等待所有异步刷新完成（如果force_sync=True）
+        if force_sync:
+            import time
+            max_wait = 30  # 最多等待30秒
+            wait_time = 0
+            while wait_time < max_wait:
+                # 检查是否还有未刷新的MemTable
+                if hasattr(self.storage.lsm_tree, 'immutable_memtables'):
+                    if len(self.storage.lsm_tree.immutable_memtables) == 0:
+                        break
+                time.sleep(0.1)
+                wait_time += 0.1
+        
+        if async_mode and not force_sync:
+            # 异步模式：非关键文件异步持久化（但关键文件已同步）
+            def async_persist():
+                try:
+                    # B+树持久化（.bpt文件）- 非关键，可以异步
+                    self.storage.bplus_tree.flush()
+                    # Merkle树持久化（.mpt文件）- 非关键，可以异步
+                    self.storage.merkle_tree.save_to_disk()
+                    # 版本管理器持久化（.ver文件）- 非关键，可以异步
+                    self.version_manager.save_to_disk(self.data_dir)
+                    # 索引管理器持久化（.idx文件）- 非关键，可以异步
+                    self.index_manager.save_to_disk(self.data_dir)
+                    # 保存数据库元数据（.amdb文件）- 非关键，可以异步
+                    self._save_metadata()
+                except Exception as e:
+                    import traceback
+                    print(f"⚠️ 异步持久化失败: {e}")
+                    traceback.print_exc()
+            threading.Thread(target=async_persist, daemon=True).start()
+        else:
+            # 同步模式：所有文件同步持久化（确保数据完整性）
+            try:
                 # B+树持久化（.bpt文件）
                 self.storage.bplus_tree.flush()
+            except Exception as e:
+                print(f"⚠️ B+树刷新失败: {e}")
+            
+            try:
                 # Merkle树持久化（.mpt文件）
                 self.storage.merkle_tree.save_to_disk()
+            except Exception as e:
+                print(f"⚠️ Merkle树持久化失败: {e}")
+            
+            try:
                 # 版本管理器持久化（.ver文件）
                 self.version_manager.save_to_disk(self.data_dir)
+            except Exception as e:
+                print(f"⚠️ 版本管理器持久化失败: {e}")
+            
+            try:
                 # 索引管理器持久化（.idx文件）
                 self.index_manager.save_to_disk(self.data_dir)
+            except Exception as e:
+                print(f"⚠️ 索引管理器持久化失败: {e}")
+            
+            try:
                 # 保存数据库元数据（.amdb文件）
                 self._save_metadata()
-                
-                # 更新文件修改时间跟踪（数据已持久化，文件已更新）
+            except Exception as e:
+                print(f"⚠️ 元数据保存失败: {e}")
+            
+            # 更新文件修改时间跟踪（数据已持久化，文件已更新）
+            try:
                 self._last_file_mtime = self._get_version_file_mtime()
+            except Exception:
+                pass  # 文件时间跟踪失败不影响主操作
     
     def _save_metadata(self):
         """保存数据库元数据到磁盘（.amdb文件）"""

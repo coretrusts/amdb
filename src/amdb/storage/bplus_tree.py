@@ -372,14 +372,32 @@ class BPlusTree:
     
     def flush(self):
         """刷新所有脏节点到磁盘"""
-        with self.lock:
-            # 保存所有脏节点
-            for node in list(self.node_cache.values()):
-                if node.dirty:
-                    self._save_node(node)
-            
-            # 保存元数据
-            self._save_metadata()
+        try:
+            with self.lock:
+                # 保存所有脏节点（优化：只保存脏节点，减少IO）
+                dirty_nodes = [node for node in self.node_cache.values() if node.dirty]
+                if not dirty_nodes:
+                    # 没有脏节点，直接返回
+                    return
+                
+                for node in dirty_nodes:
+                    try:
+                        self._save_node(node)
+                        node.dirty = False  # 标记为已保存
+                    except Exception as e:
+                        print(f"⚠️ B+树节点保存失败 (node_id={node.node_id}): {e}")
+                        # 单个节点保存失败不应阻止其他节点
+                
+                # 保存元数据
+                try:
+                    self._save_metadata()
+                except Exception as e:
+                    print(f"⚠️ B+树元数据保存失败: {e}")
+        except Exception as e:
+            import traceback
+            print(f"⚠️ B+树flush失败: {e}")
+            traceback.print_exc()
+            # flush失败不应影响主操作
     
     def range_query(self, start_key: bytes, end_key: bytes) -> List[Tuple[bytes, bytes]]:
         """范围查询（修复版本）"""

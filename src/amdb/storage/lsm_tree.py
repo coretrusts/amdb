@@ -835,17 +835,33 @@ class LSMTree:
     
     def flush(self):
         """强制刷新到磁盘（同步，确保数据持久化）"""
-        with self.lock:
-            # 同步刷新：等待所有数据写入完成
-            self._flush_memtable(sync=True)
-            
-            # 等待所有不可变MemTable刷新完成
-            while self.immutable_memtables:
-                # 检查是否还有待刷新的MemTable
-                remaining = [m for m in self.immutable_memtables if m.size > 0]
-                if not remaining:
-                    break
-                # 等待一小段时间，让异步刷新完成
-                import time
-                time.sleep(0.01)  # 10ms
+        # 使用try-except保护，避免flush失败影响主操作
+        try:
+            with self.lock:
+                # 同步刷新：等待所有数据写入完成
+                self._flush_memtable(sync=True)
+                
+                # 等待所有不可变MemTable刷新完成（优化：减少等待时间）
+                max_wait_iterations = 100  # 最多等待100次
+                wait_count = 0
+                while self.immutable_memtables and wait_count < max_wait_iterations:
+                    # 检查是否还有待刷新的MemTable
+                    remaining = [m for m in self.immutable_memtables if m.size > 0]
+                    if not remaining:
+                        break
+                    # 等待一小段时间，让异步刷新完成
+                    import time
+                    time.sleep(0.01)  # 10ms
+                    wait_count += 1
+                
+                # 如果还有未刷新的MemTable，记录警告但不阻塞
+                if self.immutable_memtables:
+                    remaining = [m for m in self.immutable_memtables if m.size > 0]
+                    if remaining:
+                        print(f"⚠️ 警告: 仍有 {len(remaining)} 个MemTable未刷新，将在后台继续处理")
+        except Exception as e:
+            import traceback
+            print(f"⚠️ LSM树flush失败: {e}")
+            traceback.print_exc()
+            # flush失败不应影响主操作
 

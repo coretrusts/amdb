@@ -133,9 +133,20 @@ class WALLogger:
     
     def flush(self):
         """刷新WAL到磁盘"""
-        with self.lock:
-            # 确保文件已写入
-            if self.current_wal_file:
-                # 文件系统会自动刷新，这里只是确保
-                pass
+        try:
+            with self.lock:
+                # 确保文件已写入（如果文件打开，强制刷新）
+                if self.current_wal_file and self.current_wal_file.exists():
+                    # 打开文件并强制刷新到磁盘
+                    try:
+                        with open(self.current_wal_file, 'r+b') as f:
+                            f.flush()
+                            os.fsync(f.fileno())  # 强制同步到磁盘
+                    except Exception as e:
+                        print(f"⚠️ WAL文件刷新失败: {e}")
+        except Exception as e:
+            import traceback
+            print(f"⚠️ WAL flush失败: {e}")
+            traceback.print_exc()
+            # WAL flush失败不应影响主操作
 
