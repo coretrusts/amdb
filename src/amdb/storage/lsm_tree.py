@@ -770,10 +770,13 @@ class LSMTree:
         seen_keys = set()
         
         # 从sstable1读取
+        from .file_format import SSTableFormat
         if os.path.exists(sstable1.filepath):
             with open(sstable1.filepath, 'rb') as f:
+                # 跳过文件头
+                f.seek(SSTableFormat.HEADER_SIZE)
                 while True:
-                    entry = SSTable.read_entry(f)
+                    entry = SSTableFormat.read_entry(f)
                     if entry is None:
                         break
                     key, value, version, timestamp = entry
@@ -784,8 +787,10 @@ class LSMTree:
         # 从sstable2读取（覆盖sstable1中的相同key）
         if os.path.exists(sstable2.filepath):
             with open(sstable2.filepath, 'rb') as f:
+                # 跳过文件头
+                f.seek(SSTableFormat.HEADER_SIZE)
                 while True:
-                    entry = SSTable.read_entry(f)
+                    entry = SSTableFormat.read_entry(f)
                     if entry is None:
                         break
                     key, value, version, timestamp = entry

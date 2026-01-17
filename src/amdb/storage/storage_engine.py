@@ -189,8 +189,11 @@ class StorageEngine:
                             continue
                         
                         # 读取数据区
+                        from .file_format import SSTableFormat
+                        # 跳过文件头
+                        f.seek(SSTableFormat.HEADER_SIZE)
                         while True:
-                            entry = SSTable.read_entry(f)
+                            entry = SSTableFormat.read_entry(f)
                             if entry is None:
                                 break
                             key, value, version, timestamp = entry
