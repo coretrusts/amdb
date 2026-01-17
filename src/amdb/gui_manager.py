@@ -61,6 +61,7 @@ class DatabaseManagerGUI:
         # 文件菜单
         file_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="文件", menu=file_menu)
+        file_menu.add_command(label="创建数据库", command=self._create_database)
         file_menu.add_command(label="连接数据库", command=self._connect_database)
         file_menu.add_command(label="断开连接", command=self._disconnect_database)
         file_menu.add_separator()
@@ -326,6 +327,125 @@ class DatabaseManagerGUI:
         """创建状态栏"""
         self.status_bar = ttk.Label(self.root, text="未连接", relief=tk.SUNKEN, anchor=tk.W)
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+    
+    def _create_database(self):
+        """创建新数据库"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("创建数据库")
+        dialog.geometry("600x400")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # 数据存储根目录
+        ttk.Label(dialog, text="数据存储根目录:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+        root_dir_entry = ttk.Entry(dialog, width=50)
+        root_dir_entry.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        root_dir_entry.insert(0, self.data_root_dir if self.data_root_dir else "./data")
+        
+        def browse_root_dir():
+            dir_path = filedialog.askdirectory(title="选择数据存储根目录", initialdir=self.data_root_dir if self.data_root_dir else "./")
+            if dir_path:
+                root_dir_entry.delete(0, tk.END)
+                root_dir_entry.insert(0, dir_path)
+        
+        ttk.Button(dialog, text="浏览", command=browse_root_dir).grid(row=0, column=2, padx=5, pady=5)
+        
+        # 数据库名称
+        ttk.Label(dialog, text="数据库名称:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
+        db_name_entry = ttk.Entry(dialog, width=50)
+        db_name_entry.grid(row=1, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        
+        # 数据库描述
+        ttk.Label(dialog, text="数据库描述:").grid(row=2, column=0, padx=5, pady=5, sticky=tk.W)
+        description_entry = ttk.Entry(dialog, width=50)
+        description_entry.grid(row=2, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        
+        # 配置文件（可选）
+        ttk.Label(dialog, text="配置文件（可选）:").grid(row=3, column=0, padx=5, pady=5, sticky=tk.W)
+        config_entry = ttk.Entry(dialog, width=50)
+        config_entry.grid(row=3, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        
+        def browse_config():
+            file_path = filedialog.askopenfilename(
+                title="选择配置文件",
+                filetypes=[("INI files", "*.ini"), ("All files", "*.*")]
+            )
+            if file_path:
+                config_entry.delete(0, tk.END)
+                config_entry.insert(0, file_path)
+        
+        ttk.Button(dialog, text="浏览", command=browse_config).grid(row=3, column=2, padx=5, pady=5)
+        
+        # 是否立即连接
+        connect_after_create = tk.BooleanVar(value=True)
+        ttk.Checkbutton(dialog, text="创建后立即连接", variable=connect_after_create).grid(row=4, column=0, columnspan=3, padx=5, pady=5, sticky=tk.W)
+        
+        def create():
+            try:
+                root_dir = root_dir_entry.get().strip()
+                db_name = db_name_entry.get().strip()
+                description = description_entry.get().strip()
+                config_path = config_entry.get().strip() or None
+                
+                if not root_dir:
+                    messagebox.showerror("错误", "请输入数据存储根目录")
+                    return
+                
+                if not db_name:
+                    messagebox.showerror("错误", "请输入数据库名称")
+                    return
+                
+                # 构建数据库路径
+                db_path = os.path.join(root_dir, db_name)
+                
+                # 检查数据库是否已存在
+                if os.path.exists(db_path):
+                    if not messagebox.askyesno("确认", f"数据库已存在: {db_path}\n是否覆盖？"):
+                        return
+                    import shutil
+                    shutil.rmtree(db_path)
+                    print(f"✓ 已删除旧数据库: {db_path}")
+                
+                # 创建数据库目录
+                os.makedirs(db_path, exist_ok=True)
+                print(f"✓ 已创建数据库目录: {db_path}")
+                
+                # 创建数据库实例
+                self.db = Database(data_dir=db_path, config_path=config_path)
+                
+                # 设置数据库描述
+                if description:
+                    self.db.set_description(description)
+                    self.db.flush()
+                
+                self.is_remote = False
+                self.remote_db = None
+                self.host = None
+                self.port = None
+                self.database = None
+                self.config_path = config_path
+                self.data_dir = db_path
+                self.data_root_dir = root_dir
+                self.db_wrapper = DatabaseWrapper(db=self.db)
+                
+                dialog.destroy()
+                messagebox.showinfo("成功", f"数据库创建成功！\n\n路径: {db_path}\n描述: {description if description else '(无)'}")
+                
+                # 如果选择立即连接，刷新数据
+                if connect_after_create.get():
+                    self._update_status(f"已连接: {self.data_dir}")
+                    self._refresh_data()
+            except Exception as e:
+                messagebox.showerror("错误", f"创建数据库失败: {str(e)}")
+                import traceback
+                traceback.print_exc()
+        
+        # 按钮
+        ttk.Button(dialog, text="创建", command=create).grid(row=5, column=1, padx=5, pady=10, sticky=tk.E)
+        ttk.Button(dialog, text="取消", command=dialog.destroy).grid(row=5, column=2, padx=5, pady=10, sticky=tk.E)
+        
+        # 配置列权重
+        dialog.columnconfigure(1, weight=1)
     
     def _connect_database(self):
         """连接数据库"""

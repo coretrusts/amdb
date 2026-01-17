@@ -196,6 +196,101 @@ class AmDbCLI(cmd.Cmd):
             return False
         return True
     
+    def do_create(self, args: str):
+        """
+        创建新数据库
+        
+        用法:
+          create database <数据库名> [--description "描述"] [--config 配置文件路径]
+          
+        示例:
+          create database my_db
+          create database my_db --description "我的数据库"
+          create database my_db --config ./amdb.ini
+        """
+        if not args:
+            print("用法: create database <数据库名> [--description \"描述\"] [--config 配置文件路径]")
+            print("示例: create database my_db")
+            print("      create database my_db --description \"我的数据库\"")
+            return
+        
+        # 解析参数
+        parts = shlex.split(args)
+        if len(parts) < 2 or parts[0].lower() != 'database':
+            print("用法: create database <数据库名> [--description \"描述\"] [--config 配置文件路径]")
+            return
+        
+        db_name = parts[1]
+        description = ""
+        config_path = None
+        
+        i = 2
+        while i < len(parts):
+            if parts[i] == '--description' and i + 1 < len(parts):
+                description = parts[i + 1]
+                i += 2
+            elif parts[i] == '--config' and i + 1 < len(parts):
+                config_path = parts[i + 1]
+                i += 2
+            else:
+                i += 1
+        
+        # 获取数据存储根目录
+        if self.data_root_dir:
+            data_root = self.data_root_dir
+        else:
+            try:
+                config = load_config(config_path)
+                data_root = config.data_root_dir if config.data_root_dir else "./data"
+            except:
+                data_root = "./data"
+        
+        # 构建数据库路径
+        if os.path.isabs(db_name):
+            db_path = db_name
+        else:
+            db_path = os.path.join(data_root, db_name)
+        
+        # 检查数据库是否已存在
+        if os.path.exists(db_path):
+            response = input(f"数据库已存在: {db_path}\n是否覆盖? (y/n): ")
+            if response.lower() != 'y':
+                print("已取消")
+                return
+            import shutil
+            shutil.rmtree(db_path)
+            print(f"✓ 已删除旧数据库: {db_path}")
+        
+        # 创建数据库目录
+        try:
+            os.makedirs(db_path, exist_ok=True)
+            print(f"✓ 已创建数据库目录: {db_path}")
+        except Exception as e:
+            print(f"✗ 创建数据库目录失败: {e}")
+            return
+        
+        # 创建数据库实例（这会自动创建 database.amdb 文件）
+        try:
+            db = Database(data_dir=db_path, config_path=config_path)
+            
+            # 设置数据库描述
+            if description:
+                db.set_description(description)
+                db.flush()  # 确保元数据保存
+            
+            print(f"✓ 数据库创建成功: {db_path}")
+            if description:
+                print(f"  描述: {description}")
+            
+            # 询问是否立即连接
+            response = input("是否立即连接到此数据库? (y/n): ")
+            if response.lower() == 'y':
+                self._connect(db_path, config_path)
+        except Exception as e:
+            print(f"✗ 创建数据库失败: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+    
     def do_connect(self, args: str):
         """
         连接数据库（支持数据库名，自动补全路径）
