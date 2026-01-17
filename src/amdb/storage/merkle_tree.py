@@ -366,8 +366,23 @@ class MerkleTree:
                     node_type = NodeType(node_type_str)
                     
                     node_data_len = struct.unpack('I', f.read(4))[0]
-                    node_data_json = f.read(node_data_len).decode()
-                    node_data_raw = json.loads(node_data_json)
+                    node_data_bytes = f.read(node_data_len)
+                    # 安全解码：使用errors='replace'处理无效UTF-8字符
+                    try:
+                        node_data_json = node_data_bytes.decode('utf-8')
+                    except UnicodeDecodeError:
+                        # 如果UTF-8解码失败，尝试使用errors='replace'
+                        node_data_json = node_data_bytes.decode('utf-8', errors='replace')
+                    
+                    # 安全解析JSON：添加错误处理
+                    try:
+                        node_data_raw = json.loads(node_data_json)
+                    except json.JSONDecodeError as e:
+                        # JSON解析失败，记录错误并跳过该节点
+                        print(f"⚠️ 警告: Merkle树节点JSON解析失败 (位置 {f.tell() - node_data_len}, 长度 {node_data_len}): {e}")
+                        print(f"   前100个字符: {node_data_json[:100] if len(node_data_json) > 100 else node_data_json}")
+                        # 跳过该节点，继续加载其他节点
+                        continue
                     
                     # 转换JSON数据：将字符串形式的bytes转换回bytes
                     node_data = {}
