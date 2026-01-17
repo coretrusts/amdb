@@ -329,6 +329,11 @@ class MerkleTree:
             return
         
         try:
+            # 检查文件大小，如果文件太小可能是损坏的
+            file_size = os.path.getsize(self.mpt_file)
+            if file_size < 50:  # 至少需要文件头+一些数据
+                print(f"⚠️ 警告: Merkle树文件太小 ({file_size} 字节)，可能已损坏，跳过加载")
+                return
             with open(self.mpt_file, 'rb') as f:
                 # 读取文件魔数
                 magic = f.read(4)
@@ -425,6 +430,11 @@ class MerkleTree:
                     self.root = self.nodes[root_hash]
         except Exception as e:
             import traceback
-            print(f"加载Merkle树失败: {e}")
-            traceback.print_exc()
+            print(f"⚠️ 警告: 加载Merkle树失败: {e}")
+            # 不打印完整traceback，只记录错误，允许继续运行
+            # traceback.print_exc()
+            # 清空已加载的数据，避免部分加载导致的不一致
+            self.nodes.clear()
+            self.key_value_map.clear()
+            self.root = None
 
