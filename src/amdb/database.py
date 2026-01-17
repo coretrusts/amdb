@@ -720,6 +720,13 @@ class Database:
                 f.write(struct.pack('H', 1))  # 2 bytes
                 
                 # 写入元数据（JSON格式）
+                # 获取Merkle根哈希（如果Merkle树为空，使用空哈希）
+                try:
+                    merkle_root = self.get_root_hash().hex()
+                except Exception:
+                    # 如果Merkle树还未初始化或为空，使用空哈希
+                    merkle_root = '0' * 64  # 64个0，表示空哈希
+                
                 metadata = {
                     'data_dir': str(self.data_dir),
                     'enable_sharding': self.enable_sharding,
@@ -730,7 +737,7 @@ class Database:
                     'description': getattr(self, '_description', ''),  # 数据库备注
                     'total_keys': len(self.version_manager.get_all_keys()),
                     'current_version': self.transaction_manager.get_snapshot_version(),
-                    'merkle_root': self.get_root_hash().hex()
+                    'merkle_root': merkle_root
                 }
                 
                 metadata_json = json.dumps(metadata, ensure_ascii=False).encode('utf-8')
@@ -844,6 +851,20 @@ class Database:
             self._description = ''  # 默认无备注
             # 确保数据目录存在
             Path(self.data_dir).mkdir(parents=True, exist_ok=True)
+            
+            # 创建所有必需的目录结构（确保数据库结构完整）
+            required_dirs = [
+                'versions',  # 版本管理器数据
+                'lsm',       # LSM树数据（StorageEngine已创建）
+                'wal',       # WAL日志（WALLogger已创建）
+                'bplus',     # B+树数据（BPlusTree已创建）
+                'merkle',    # Merkle树数据（MerkleTree已创建）
+                'indexes',   # 索引数据
+            ]
+            for dir_name in required_dirs:
+                dir_path = Path(self.data_dir) / dir_name
+                dir_path.mkdir(parents=True, exist_ok=True)
+            
             # 立即保存元数据，创建 database.amdb 文件
             try:
                 self._save_metadata()
